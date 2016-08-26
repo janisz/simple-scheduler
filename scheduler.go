@@ -36,6 +36,7 @@ var commandChan = make(chan string, 100)
 
 var tasksState = make(map[string]*TaskStatus)
 
+var stateFile = fmt.Sprintf("%s/%s", os.TempDir(), "state.json")
 var frameworkInfoFile = fmt.Sprintf("%s/%s", os.TempDir(), "framewrok.json")
 
 func main() {
@@ -153,6 +154,7 @@ func subscribe() error {
 			mesosStreamID = res.Header.Get("Mesos-Stream-Id")
 			json, _ := marshaller.MarshalToString(&frameworkInfo)
 			ioutil.WriteFile(frameworkInfoFile, []byte(json), 0644)
+			reconcile()
 		case Event_HEARTBEAT:
 			log.Print("PING")
 		case Event_OFFERS:
@@ -163,8 +165,34 @@ func subscribe() error {
 	}
 }
 
+func reconcile() {
+	oldState, err := ioutil.ReadFile(stateFile)
+	if err == nil {
+		json.Unmarshal(oldState, &tasksState)
+	}
+	var oldTasks []*Call_Reconcile_Task
+	maxID := 0
+	for _, t := range tasksState {
+		oldTasks = append(oldTasks, &Call_Reconcile_Task{
+			TaskId:  t.TaskId,
+			AgentId: t.AgentId,
+		})
+		numericID, err := strconv.Atoi(t.TaskId.GetValue())
+		if err == nil && numericID > maxID {
+			maxID = numericID
+		}
+	}
+	atomic.StoreUint64(&taskID, uint64(maxID))
+	call(&Call{
+		Type:      Call_RECONCILE.Enum(),
+		Reconcile: &Call_Reconcile{Tasks: oldTasks},
+	})
+}
+
 func handleUpdate(update *Event_Update) error {
 	tasksState[update.Status.TaskId.GetValue()] = update.Status
+	stateJSON, _ := json.Marshal(tasksState)
+	ioutil.WriteFile(stateFile, stateJSON, 0644)
 	return call(&Call{
 		Type: Call_ACKNOWLEDGE.Enum(),
 		Acknowledge: &Call_Acknowledge{
