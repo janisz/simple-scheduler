@@ -1,16 +1,17 @@
 package main
 
 import (
-	"sync/atomic"
 	"bufio"
 	"bytes"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/golang/protobuf/jsonpb"
 )
@@ -32,6 +33,8 @@ var marshaller = jsonpb.Marshaler{
 var taskID uint64
 var commandChan = make(chan string, 100)
 
+var frameworkInfoFile = fmt.Sprintf("%s/%s", os.TempDir(), "framewrok.json")
+
 func main() {
 	user := "root"
 	name := "simple_framework"
@@ -41,11 +44,20 @@ func main() {
 	}
 	listen := ":9090"
 	webuiURL := fmt.Sprintf("http://%s%s", hostname, listen)
-	frameworkInfo = FrameworkInfo{
-		User:     &user,
-		Name:     &name,
-		Hostname: &hostname,
-		WebuiUrl: &webuiURL,
+	failoverTimeout := float64(3600)
+	checkpoint := true
+	frameworkJSON, err := ioutil.ReadFile(frameworkInfoFile)
+	if err == nil {
+		jsonpb.UnmarshalString(string(frameworkJSON), &frameworkInfo)
+	} else {
+		frameworkInfo = FrameworkInfo{
+			User:            &user,
+			Name:            &name,
+			Hostname:        &hostname,
+			WebuiUrl:        &webuiURL,
+			FailoverTimeout: &failoverTimeout,
+			Checkpoint:      &checkpoint,
+		}
 	}
 
 	http.HandleFunc("/", web)
@@ -71,6 +83,7 @@ func web(w http.ResponseWriter, r *http.Request) {
 
 func subscribe() error {
 	subscribeCall := &Call{
+		FrameworkId: frameworkInfo.Id,
 		Type:      Call_SUBSCRIBE.Enum(),
 		Subscribe: &Call_Subscribe{FrameworkInfo: &frameworkInfo},
 	}
@@ -93,6 +106,9 @@ func subscribe() error {
 		data := line[:bytesCount]
 		// Rest data will be bytes of next message
 		bytesCount, _ = strconv.Atoi((line[bytesCount:]))
+		if bytesCount == 0 {
+			continue;
+		}
 		// Do not handle events, just log them
 		log.Printf("Got: [%s]", data)
 
@@ -105,6 +121,8 @@ func subscribe() error {
 			log.Print("Subscribed")
 			frameworkInfo.Id = event.Subscribed.FrameworkId
 			mesosStreamID = res.Header.Get("Mesos-Stream-Id")
+			json, _ := marshaller.MarshalToString(&frameworkInfo)
+			ioutil.WriteFile(frameworkInfoFile, []byte(json), 0644)
 		case Event_HEARTBEAT:
 			log.Print("PING")
 		case Event_OFFERS:
