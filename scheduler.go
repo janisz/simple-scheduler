@@ -17,6 +17,7 @@ const schedulerApiUrl = "http://10.10.10.10:5050/api/v1/scheduler"
 
 // Current framework configuration
 var frameworkInfo FrameworkInfo
+var mesosStreamID string
 
 // Marshaler to serialize Protobuf Message to JSON
 var marshaller = jsonpb.Marshaler{
@@ -67,5 +68,18 @@ func subscribe() error {
 		bytesCount, _ = strconv.Atoi((line[bytesCount:]))
 		// Do not handle events, just log them
 		log.Printf("Got: [%s]", data)
+
+		var event Event
+		jsonpb.UnmarshalString(data, &event)
+		log.Printf("Got: [%s]", event.String())
+	
+		switch *event.Type {
+		case Event_SUBSCRIBED:
+			log.Print("Subscribed")
+			frameworkInfo.Id = event.Subscribed.FrameworkId
+			mesosStreamID = res.Header.Get("Mesos-Stream-Id")
+		case Event_HEARTBEAT:
+			log.Print("PING")
+		}
 	}
 }
