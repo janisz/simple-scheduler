@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"log"
+	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -80,6 +82,36 @@ func subscribe() error {
 			mesosStreamID = res.Header.Get("Mesos-Stream-Id")
 		case Event_HEARTBEAT:
 			log.Print("PING")
+		case Event_OFFERS:
+			log.Printf("Handle offers returns: %v", handleOffers(event.Offers))
 		}
 	}
+}
+
+func handleOffers(offers *Event_Offers) error {
+		offerIds := []*OfferID{}
+		for _, offer := range offers.Offers {
+			offerIds = append(offerIds, offer.Id)
+		}
+		decline := &Call{
+			Type:    Call_DECLINE.Enum(),
+			Decline: &Call_Decline{OfferIds: offerIds},
+		}
+		return call(decline)
+}
+
+func call(message *Call) error {
+	message.FrameworkId = frameworkInfo.Id
+	body, _ := marshaller.MarshalToString(message)
+	req, _ := http.NewRequest("POST", schedulerApiUrl, bytes.NewBuffer([]byte(body)))	
+	req.Header.Set("Mesos-Stream-Id", mesosStreamID)
+	req.Header.Set("Content-Type", "application/json")
+	log.Printf("Call %s %s", message.Type, string(body))
+	res, _ := http.DefaultClient.Do(req)
+	defer res.Body.Close()
+	if res.StatusCode != 202 {
+		io.Copy(os.Stderr, res.Body)
+		return fmt.Errorf("Error %d", res.StatusCode)
+	}
+	return nil
 }
