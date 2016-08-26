@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -32,6 +33,8 @@ var marshaller = jsonpb.Marshaler{
 
 var taskID uint64
 var commandChan = make(chan string, 100)
+
+var tasksState = make(map[string]*TaskStatus)
 
 var frameworkInfoFile = fmt.Sprintf("%s/%s", os.TempDir(), "framewrok.json")
 
@@ -76,16 +79,43 @@ func web(w http.ResponseWriter, r *http.Request) {
 		commandChan <- cmd
 		w.WriteHeader(http.StatusAccepted)
 		fmt.Fprintf(w, "Scheduled: %s", cmd)
+	case "DELETE":
+		id := r.Form["id"][0]
+		err := kill(id)
+		if err != nil {
+			fmt.Fprint(w, err)
+		} else {
+			fmt.Print(w, "KILLED")
+		}
+	case "GET":
+		stateJSON, _ := json.Marshal(tasksState)
+		w.Header().Add("Content-type", "application/json")
+		fmt.Fprint(w, string(stateJSON))
 	default:
 		http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
 	}
 }
 
+func kill(id string) error {
+	update, ok := tasksState[id]
+	log.Printf("Kill task %s [%#v]", id, update)
+	if !ok {
+		return fmt.Errorf("Unknown task %s", id)
+	}
+	return call(&Call{
+		Type: Call_KILL.Enum(),
+		Kill: &Call_Kill{
+			TaskId:  update.TaskId,
+			AgentId: update.AgentId,
+		},
+	})
+}
+
 func subscribe() error {
 	subscribeCall := &Call{
 		FrameworkId: frameworkInfo.Id,
-		Type:      Call_SUBSCRIBE.Enum(),
-		Subscribe: &Call_Subscribe{FrameworkInfo: &frameworkInfo},
+		Type:        Call_SUBSCRIBE.Enum(),
+		Subscribe:   &Call_Subscribe{FrameworkInfo: &frameworkInfo},
 	}
 	body, _ := marshaller.MarshalToString(subscribeCall)
 	log.Print(body)
@@ -107,7 +137,7 @@ func subscribe() error {
 		// Rest data will be bytes of next message
 		bytesCount, _ = strconv.Atoi((line[bytesCount:]))
 		if bytesCount == 0 {
-			continue;
+			continue
 		}
 		// Do not handle events, just log them
 		log.Printf("Got: [%s]", data)
@@ -134,6 +164,7 @@ func subscribe() error {
 }
 
 func handleUpdate(update *Event_Update) error {
+	tasksState[update.Status.TaskId.GetValue()] = update.Status
 	return call(&Call{
 		Type: Call_ACKNOWLEDGE.Enum(),
 		Acknowledge: &Call_Acknowledge{
