@@ -109,8 +109,21 @@ func subscribe() error {
 			log.Print("PING")
 		case Event_OFFERS:
 			log.Printf("Handle offers returns: %v", handleOffers(event.Offers))
+		case Event_UPDATE:
+			log.Printf("Handle update returns: %v", handleUpdate(event.Update))
 		}
 	}
+}
+
+func handleUpdate(update *Event_Update) error {
+	return call(&Call{
+		Type: Call_ACKNOWLEDGE.Enum(),
+		Acknowledge: &Call_Acknowledge{
+			AgentId: update.Status.AgentId,
+			TaskId:  update.Status.TaskId,
+			Uuid:    update.Status.Uuid,
+		},
+	})
 }
 
 func handleOffers(offers *Event_Offers) error {
